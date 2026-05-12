@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use dirs;
+
 use ratatui::layout::Rect;
 use serde_json::Value;
 use thiserror::Error;
@@ -1580,14 +1582,52 @@ impl App {
         self.hooks.execute(event, context)
     }
 
-    /// Create a hook context with common fields pre-populated
+    /// Create a hook context with common fields pre-populated.
+    ///
+    /// When hooks are installed, this also writes the current conversation
+    /// transcript (sans tool results) to `~/.deepseek/transcript.json` and
+    /// points `DEEPSEEK_TRANSCRIPT_PATH` at it so hook scripts can inspect
+    /// the full conversation context.
     pub fn base_hook_context(&self) -> HookContext {
-        HookContext::new()
+        let mut ctx = HookContext::new()
             .with_mode(self.mode.label())
             .with_workspace(self.workspace.clone())
             .with_model(&self.model)
             .with_session_id(self.hooks.session_id())
-            .with_tokens(self.session.total_tokens)
+            .with_tokens(self.session.total_tokens);
+
+        // Write transcript for hook scripts (best-effort; failures are
+        // non-fatal).
+        if let Some(tp) = Self::write_transcript(&self.api_messages) {
+            ctx = ctx.with_transcript_path(tp);
+        }
+
+        ctx
+    }
+
+    /// Serialize the current conversation (minus tool results) to
+    /// `~/.deepseek/transcript.json` and return the path. Silently
+    /// returns `None` on I/O or serialization failure.
+    fn write_transcript(messages: &[Message]) -> Option<PathBuf> {
+        let home = dirs::home_dir()?;
+        let dir = home.join(".deepseek");
+        let path = dir.join("transcript.json");
+
+        // Strip tool-result messages from the transcript — they bloat the
+        // file and Git AI rejects them anyway (#security).
+        let clean: Vec<&Message> = messages
+            .iter()
+            .filter(|m| {
+                !m.content.iter().any(|b| {
+                    matches!(b, crate::models::ContentBlock::ToolResult { .. })
+                })
+            })
+            .collect();
+
+        let json = serde_json::to_string_pretty(&clean).ok()?;
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::write(&path, &json).ok()?;
+        Some(path)
     }
 
     /// Soft cap on [`Self::history`] length. When history exceeds this count,

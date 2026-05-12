@@ -251,6 +251,10 @@ pub struct HookContext {
     pub total_tokens: Option<u32>,
     /// Session cost in USD
     pub session_cost: Option<f64>,
+    /// Path to a JSON file containing the current conversation transcript
+    /// (messages filtered to exclude tool results). Hook scripts can read
+    /// this file to access the full conversation context.
+    pub transcript_path: Option<PathBuf>,
 }
 
 impl HookContext {
@@ -328,6 +332,15 @@ impl HookContext {
         self
     }
 
+    /// Set the path to a conversation transcript file for hook scripts
+    /// to read. The file should contain the current session messages
+    /// (serialized as JSON, with tool results filtered out).
+    #[allow(dead_code)] // Public builder API
+    pub fn with_transcript_path(mut self, path: PathBuf) -> Self {
+        self.transcript_path = Some(path);
+        self
+    }
+
     /// Convert to environment variables
     pub fn to_env_vars(&self) -> HashMap<String, String> {
         let mut env = HashMap::new();
@@ -397,6 +410,10 @@ impl HookContext {
         }
         if let Some(cost) = self.session_cost {
             env.insert("DEEPSEEK_SESSION_COST".to_string(), format!("{cost:.6}"));
+        }
+
+        if let Some(ref tp) = self.transcript_path {
+            env.insert("DEEPSEEK_TRANSCRIPT_PATH".to_string(), tp.display().to_string());
         }
 
         env
